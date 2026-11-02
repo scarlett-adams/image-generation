@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Infinite Monkey Museum</title>
+    <meta
+      name="description"
+      content="A monkey paints random pixel grids at high speed and compares each one to tiny versions of real paintings from the Harvard Art Museums."
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <p class="eyebrow">An experiment with the Harvard Art Museums collection</p>
+      <h1>Infinite Monkey Museum</h1>
+      <p class="lede">
+        A monkey paints random <span data-size-label>16 × 16</span> pictures, very fast, using the
+        ten colors that best describe <span data-works-count>a thousand</span> paintings. Each attempt
+        is compared with every painting in the collection. How close can chance get?
+      </p>
+    </header>
+
+    <main>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <noscript><div class="notice">The monkey needs JavaScript to paint.</div></noscript>
+
+      <section class="controls" aria-label="Controls">
+        <button id="run" class="button primary" type="button" disabled>Start</button>
+        <label class="field">
+          <span>Speed</span>
+          <select id="speed">
+            <option value="1">1 per second</option>
+            <option value="10">10 per second</option>
+            <option value="100">100 per second</option>
+            <option value="1000">1,000 per second</option>
+            <option value="0" selected>As fast as possible</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Monkey</span>
+          <select id="level"></select>
+        </label>
+        <label class="field">
+          <span>Grid</span>
+          <select id="size">
+            <option value="16" selected>16 × 16</option>
+            <option value="8">8 × 8</option>
+          </select>
+        </label>
+        <button id="reset" class="button" type="button" disabled>Reset</button>
+      </section>
+
+      <section class="tally" aria-live="off">
+        <p><strong id="tried">0</strong> <span id="tried-label">monkeys tried</span></p>
+        <p class="muted" id="rate">Press Start to set the monkey loose.</p>
+      </section>
+
+      <section class="gallery" aria-label="Gallery">
+        <figure class="piece">
+          <div class="frame"><canvas id="current" width="16" height="16" aria-label="The monkey's latest grid"></canvas></div>
+          <figcaption class="label">
+            <p class="label-kicker">Latest attempt</p>
+            <p class="label-title" id="current-title">—</p>
+            <p class="label-meta" id="current-score"></p>
+          </figcaption>
+        </figure>
+
+        <figure class="piece">
+          <div class="frame"><canvas id="best" width="16" height="16" aria-label="The best grid so far"></canvas></div>
+          <figcaption class="label">
+            <p class="label-kicker">Best so far</p>
+            <p class="label-title" id="best-score">—</p>
+            <p class="label-meta" id="best-meta"></p>
+          </figcaption>
+        </figure>
+
+        <figure class="piece">
+          <div class="frame"><canvas id="closest" width="16" height="16" aria-label="The closest artwork, as a grid"></canvas></div>
+          <figcaption class="label" id="closest-label">
+            <p class="label-kicker">Closest artwork</p>
+            <p class="label-artist" id="closest-artist">—</p>
+            <p class="label-title"><cite id="closest-title"></cite><span id="closest-dated"></span></p>
+            <p class="label-meta" id="closest-culture"></p>
+          </figcaption>
+        </figure>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <p>
+        Artwork data and images from the
+        <a href="https://harvardartmuseums.org/collections/api">Harvard Art Museums API</a>.
+        Not affiliated with the Harvard Art Museums.
+      </p>
+    </footer>
+  </body>
+</html>

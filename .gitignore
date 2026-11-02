@@ -1,0 +1,18 @@
+# Secrets: the API key lives only in .env (local) and Vercel's env vars.
+.env
+.env.*
+!.env.example
+
+# Pipeline caches and build venv
+.cache/
+.venv/
+.venv-build/
+__pycache__/
+*.pyc
+
+# Node / Vercel
+node_modules/
+.vercel/
+
+# OS
+.DS_Store

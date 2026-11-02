@@ -1,0 +1,13 @@
+{
+  "name": "infinite-monkey-museum",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Random pixel monkeys versus the Harvard Art Museums painting collection.",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\" && python3 -m unittest discover -s scripts",
+    "grids": "python3 scripts/build_grids.py --size 16 8",
+    "dev": "vercel dev"
+  },
+  "engines": { "node": ">=20" }
+}
