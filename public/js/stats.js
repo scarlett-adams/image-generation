@@ -367,6 +367,30 @@ export function meanSd(sum, sq, count) {
 }
 
 // ---------------------------------------------------------------------------
+// Exactly-right pixels under pure chance
+// ---------------------------------------------------------------------------
+
+/** log10 of P(X >= k) for X ~ Binomial(n, p), exact (summed in log space). */
+export function log10BinomialTail(n, k, p) {
+  if (k <= 0) return 0;
+  if (k > n) return -Infinity;
+  const logFact = new Float64Array(n + 1);
+  for (let i = 2; i <= n; i++) logFact[i] = logFact[i - 1] + Math.log(i);
+  const lp = Math.log(p);
+  const lq = Math.log1p(-p);
+  let max = -Infinity;
+  const terms = [];
+  for (let j = k; j <= n; j++) {
+    const t = logFact[n] - logFact[j] - logFact[n - j] + j * lp + (n - j) * lq;
+    terms.push(t);
+    if (t > max) max = t;
+  }
+  let sum = 0;
+  for (const t of terms) sum += Math.exp(t - max);
+  return (max + Math.log(sum)) / Math.LN10;
+}
+
+// ---------------------------------------------------------------------------
 // The odds of an exact copy
 // ---------------------------------------------------------------------------
 

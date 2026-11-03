@@ -117,3 +117,79 @@ test("level 0 is uniform over the palette", () => {
   const g = generate(0, new Uint8Array(m.cells), m, mulberry32(1));
   assert.ok(g.every((v) => v < m.K));
 });
+
+test("color sampler follows its distribution", async () => {
+  const { makeSampler } = await import("../public/js/core.js");
+  const q = [0.5, 0.25, 0, 0.25];
+  const draw = makeSampler(q, 4);
+  const rand = mulberry32(3);
+  const counts = [0, 0, 0, 0];
+  for (let i = 0; i < 40000; i++) counts[draw(rand())]++;
+  counts.forEach((c, i) => close(c / 40000, q[i], 0.01));
+  const uniform = makeSampler(null, 5);
+  assert.equal(uniform(0.99), 4);
+  assert.equal(uniform(0), 0);
+});
+
+test("levels 1-3 keep colors in range and add structure", async () => {
+  const { LEVELS, colorShares, makeSampler, smudgedGrid, fieldsGrid } = await import("../public/js/core.js");
+  assert.deepEqual(LEVELS.map((l) => l.level), [0, 1, 2, 3]);
+  const m = makeModel(fixture({ size: 16, works: 4, K: 5 }));
+  const rand = mulberry32(9);
+  const sameNeighbors = (g) => {
+    let same = 0;
+    for (let y = 0; y < 16; y++) for (let x = 1; x < 16; x++) same += g[y * 16 + x] === g[y * 16 + x - 1];
+    return same / (16 * 15);
+  };
+  const agg = { 0: 0, 1: 0, 2: 0 };
+  const counts1 = new Array(5).fill(0);
+  for (let t = 0; t < 300; t++) {
+    for (const level of [0, 1, 2]) {
+      const g = generate(level, new Uint8Array(m.cells), m, rand);
+      assert.ok(g.every((v) => v < m.K), `level ${level} in range`);
+      agg[level] += sameNeighbors(g) / 300;
+      if (level === 1) g.forEach((v) => counts1[v]++);
+    }
+  }
+  close(agg[0], 1 / 5, 0.02); // independent pixels: neighbors agree 1 time in K
+  assert.ok(agg[1] > 0.5, `smudged neighbors agree ${agg[1]}`);
+  assert.ok(agg[2] > 0.6, `color fields agree ${agg[2]}`);
+  // Smudging keeps every color equally likely on its own.
+  counts1.forEach((c) => close(c / (300 * 256), 1 / 5, 0.02));
+  // Level 3 only uses the borrowed palette's colors.
+  const q = colorShares(m, 1);
+  const draw = makeSampler(q, m.K);
+  for (let t = 0; t < 50; t++) {
+    const g = generate(3, new Uint8Array(m.cells), m, rand, draw);
+    assert.ok(g.every((v) => q[v] > 0));
+  }
+  assert.ok(fieldsGrid(new Uint8Array(16), 4, draw, rand).every((v) => q[v] > 0));
+  assert.ok(smudgedGrid(new Uint8Array(16), 4, draw, rand).every((v) => q[v] > 0));
+});
+
+test("the mutation monkey never gets worse and copies its target", async () => {
+  const { subModel, mutateGeneration, makeSampler } = await import("../public/js/core.js");
+  const m = makeModel(fixture({ size: 8, works: 3, K: 4 }));
+  const t = subModel(m, 2);
+  assert.equal(t.N, 1);
+  assert.deepEqual([...t.grids], [...m.grids.slice(2 * 64, 3 * 64)]);
+  const rand = mulberry32(4);
+  const sample = makeSampler(null, m.K);
+  const parent = generate(0, new Uint8Array(m.cells), m, rand);
+  const child = new Uint8Array(m.cells);
+  const bestChild = new Uint8Array(m.cells);
+  let score = scoreAgainst(t, parent, 0);
+  let generations = 0;
+  while (score > 0 && generations < 5000) {
+    const s = mutateGeneration(t, parent, 50, 1, sample, rand, child, bestChild);
+    generations++;
+    if (s <= score) {
+      parent.set(bestChild);
+      assert.ok(s <= score);
+      score = s;
+    }
+  }
+  assert.equal(score, 0, "reached an exact copy");
+  assert.equal(exactMatch(t, parent, 0), 1);
+  assert.ok(generations < 2000, `took ${generations} generations`);
+});

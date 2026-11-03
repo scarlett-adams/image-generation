@@ -231,7 +231,7 @@ export function drawHistogram(container, { scale, rank, win, series }) {
   gridAndAxes(
     f.plot, f.w, f.h,
     niceTicks(0, ymax, 4), ys, (t) => `${+(t * 100).toFixed(2)}%`,
-    xTicks, xs, (t) => formatValue(t, rank, rank === "surprise" ? 0 : Number.isInteger(t * 100) ? 0 : 1),
+    xTicks, xs, (t) => formatValue(t, rank, rank === "surprise" || Math.abs(t * 100 - Math.round(t * 100)) < 1e-9 ? 0 : 1),
   );
 
   for (const [k, s] of series.entries()) {
@@ -332,6 +332,7 @@ export function drawBestOfN(container, { rank, nMax, monkeys, lines }) {
   );
 
   for (const l of lines) {
+    if (l.hidden) continue; // only shapes the axis
     const pts = l.points.filter(([n, v]) => n <= nMax && Number.isFinite(v));
     if (!pts.length) continue;
     let d = "";
@@ -350,15 +351,16 @@ export function drawBestOfN(container, { rank, nMax, monkeys, lines }) {
     }
   }
 
+  const shown = lines.filter((l) => !l.hidden);
   hoverLayer(f, container, (px) => {
     const n = Math.max(1, Math.round(10 ** ((px / f.w) * xmax)));
-    const values = lines.map((l) => (l.valueAt ? l.valueAt(n) : stepAt(l.points, n)));
+    const values = shown.map((l) => (l.valueAt ? l.valueAt(n) : stepAt(l.points, n)));
     const ok = values.filter(Number.isFinite);
     return {
       x: xs(n),
       y: ok.length ? ys(Math.max(...ok)) : 0,
       title: `After ${n.toLocaleString("en-US")} monkey${n === 1 ? "" : "s"}${n > monkeys ? " (not reached yet)" : ""}`,
-      rows: lines.map((l, i) => ({ value: formatValue(values[i], rank), label: l.label, color: l.color, dashed: l.dashed })),
+      rows: shown.map((l, i) => ({ value: formatValue(values[i], rank), label: l.label, color: l.color, dashed: l.dashed })),
     };
   });
 }

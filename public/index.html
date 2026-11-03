@@ -6,20 +6,28 @@
     <title>Infinite Monkey Museum</title>
     <meta
       name="description"
-      content="A monkey paints random pixel grids at high speed and compares each one to tiny versions of real paintings from the Harvard Art Museums."
+      content="A monkey paints random pixel grids at high speed and compares each one to tiny versions of real paintings from the Harvard Art Museums. How close can chance get to art?"
     />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="style.css" />
     <script type="module" src="js/app.js"></script>
   </head>
   <body>
+    <a class="skip" href="#experiment">Skip to the experiment</a>
     <header class="masthead">
+      <nav class="site-nav" aria-label="Sections">
+        <a href="#experiment">Experiment</a>
+        <a href="#statistics">Statistics</a>
+        <a href="#findings">Findings</a>
+        <a href="#about">About</a>
+      </nav>
       <p class="eyebrow">An experiment with the Harvard Art Museums collection</p>
       <h1>Infinite Monkey Museum</h1>
       <p class="lede">
         A monkey paints random <span data-size-label>16 × 16</span> pictures, very fast, using the
         ten colors that best describe <span data-works-count>a thousand</span> paintings. Each attempt
-        is compared with every painting in the collection. How close can chance get?
+        is compared with every painting in the collection. How close can chance get to art, and how
+        much faster does it get there when good guesses are kept?
       </p>
     </header>
 
@@ -27,75 +35,124 @@
       <div id="notice" class="notice" role="alert" hidden></div>
       <noscript><div class="notice">The monkey needs JavaScript to paint.</div></noscript>
 
-      <section class="controls" aria-label="Controls">
-        <button id="run" class="button primary" type="button" disabled>Start</button>
-        <label class="field">
-          <span>Speed</span>
-          <select id="speed">
-            <option value="1">1 per second</option>
-            <option value="10">10 per second</option>
-            <option value="100">100 per second</option>
-            <option value="1000">1,000 per second</option>
-            <option value="0" selected>As fast as possible</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Monkey</span>
-          <select id="level"></select>
-        </label>
-        <label class="field">
-          <span>Rank matches by</span>
-          <select id="rank">
-            <option value="similarity" selected>Similarity</option>
-            <option value="surprise">Surprise</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Grid</span>
-          <select id="size">
-            <option value="16" selected>16 × 16</option>
-            <option value="8">8 × 8</option>
-          </select>
-        </label>
-        <button id="reset" class="button" type="button" disabled>Reset</button>
+      <section id="experiment" aria-label="The experiment">
+        <div class="controls" role="group" aria-label="Controls">
+          <div class="controls-row">
+            <button id="run" class="button primary" type="button" disabled>Start</button>
+            <button id="reset" class="button" type="button" disabled>Reset</button>
+            <label class="field">
+              <span>Speed</span>
+              <select id="speed">
+                <option value="1">1 grid a second</option>
+                <option value="10">10 a second</option>
+                <option value="100">100 a second</option>
+                <option value="1000">1,000 a second</option>
+                <option value="10000">10,000 a second</option>
+                <option value="0" selected>As fast as possible</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Grid</span>
+              <select id="size">
+                <option value="16" selected>16 × 16</option>
+                <option value="8">8 × 8</option>
+              </select>
+            </label>
+          </div>
+          <div class="controls-row">
+            <label class="field">
+              <span>Mode</span>
+              <select id="mode">
+                <option value="chance" selected>Pure chance</option>
+                <option value="mutation">Mutation (Dawkins's weasel)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Monkey</span>
+              <select id="level"></select>
+            </label>
+            <label class="field">
+              <span>Rank matches by</span>
+              <select id="rank">
+                <option value="similarity" selected>Similarity</option>
+                <option value="surprise">Surprise</option>
+              </select>
+            </label>
+            <div class="field target-field">
+              <label for="target-input">Target painting (optional)</label>
+              <div class="target-row">
+                <input
+                  id="target-input"
+                  type="search"
+                  list="target-list"
+                  placeholder="Search titles and artists"
+                  autocomplete="off"
+                />
+                <button id="target-random" class="button small" type="button">Random</button>
+                <button id="target-clear" class="button small" type="button">Clear</button>
+              </div>
+              <datalist id="target-list"></datalist>
+            </div>
+          </div>
+          <p class="controls-help" id="mode-help" aria-live="polite"></p>
+        </div>
+
+        <div class="tally" aria-live="off">
+          <p><strong id="tried">0</strong> <span id="tried-label">monkeys tried</span></p>
+          <p class="muted" id="rate">Press Start (or the space bar) to set the monkey loose.</p>
+        </div>
+
+        <div class="gallery" aria-label="Gallery">
+          <figure class="piece">
+            <div class="frame"><div class="canvas-box"><canvas id="current" width="16" height="16" aria-label="The monkey's latest grid"></canvas></div></div>
+            <figcaption class="label">
+              <p class="label-kicker" id="current-kicker">Latest attempt</p>
+              <p class="label-title" id="current-title">—</p>
+              <p class="label-meta" id="current-score"></p>
+            </figcaption>
+          </figure>
+
+          <figure class="piece">
+            <div class="frame"><div class="canvas-box"><canvas id="best" width="16" height="16" aria-label="The best grid so far"></canvas></div></div>
+            <figcaption class="label">
+              <p class="label-kicker" id="best-kicker">Best so far</p>
+              <p class="label-title" id="best-score">—</p>
+              <p class="label-meta" id="best-meta"></p>
+            </figcaption>
+          </figure>
+
+          <figure class="piece">
+            <div class="frame"><div class="canvas-box"><canvas id="closest" width="16" height="16" aria-label="The closest artwork, as a grid, in its real proportions"></canvas></div></div>
+            <figcaption class="label" id="closest-label">
+              <p class="label-kicker" id="closest-kicker">Closest artwork</p>
+              <p class="label-artist" id="closest-artist">—</p>
+              <p class="label-title"><cite id="closest-title"></cite><span id="closest-dated"></span></p>
+              <p class="label-meta" id="closest-culture"></p>
+            </figcaption>
+          </figure>
+        </div>
+
+        <section class="reveal" id="reveal" aria-labelledby="reveal-title" hidden>
+          <div class="reveal-image">
+            <div class="reveal-frame" id="reveal-frame">
+              <img id="reveal-img" alt="" decoding="async" hidden />
+              <p class="reveal-status" id="reveal-status"></p>
+            </div>
+          </div>
+          <div class="reveal-text">
+            <p class="eyebrow">The real painting</p>
+            <h2 id="reveal-title">—</h2>
+            <dl class="reveal-facts" id="reveal-facts"></dl>
+            <p class="reveal-links" id="reveal-links"></p>
+            <p class="muted small" id="reveal-note">
+              The grid beside it is all the monkey ever sees: 256 cells in ten colors. Details and
+              image come live from the Harvard Art Museums.
+            </p>
+          </div>
+        </section>
       </section>
 
-      <section class="tally" aria-live="off">
-        <p><strong id="tried">0</strong> <span id="tried-label">monkeys tried</span></p>
-        <p class="muted" id="rate">Press Start to set the monkey loose.</p>
-      </section>
-
-      <section class="gallery" aria-label="Gallery">
-        <figure class="piece">
-          <div class="frame"><div class="canvas-box"><canvas id="current" width="16" height="16" aria-label="The monkey's latest grid"></canvas></div></div>
-          <figcaption class="label">
-            <p class="label-kicker">Latest attempt</p>
-            <p class="label-title" id="current-title">—</p>
-            <p class="label-meta" id="current-score"></p>
-          </figcaption>
-        </figure>
-
-        <figure class="piece">
-          <div class="frame"><div class="canvas-box"><canvas id="best" width="16" height="16" aria-label="The best grid so far"></canvas></div></div>
-          <figcaption class="label">
-            <p class="label-kicker">Best so far</p>
-            <p class="label-title" id="best-score">—</p>
-            <p class="label-meta" id="best-meta"></p>
-          </figcaption>
-        </figure>
-
-        <figure class="piece">
-          <div class="frame"><div class="canvas-box"><canvas id="closest" width="16" height="16" aria-label="The closest artwork, as a grid, in its real proportions"></canvas></div></div>
-          <figcaption class="label" id="closest-label">
-            <p class="label-kicker">Closest artwork</p>
-            <p class="label-artist" id="closest-artist">—</p>
-            <p class="label-title"><cite id="closest-title"></cite><span id="closest-dated"></span></p>
-            <p class="label-meta" id="closest-culture"></p>
-          </figcaption>
-        </figure>
-      </section>
-
-      <section class="stats" aria-labelledby="stats-title">
+      <section id="statistics" class="stats" aria-labelledby="stats-title">
         <header class="section-head">
           <p class="eyebrow">The statistics</p>
           <h2 id="stats-title">How close does chance get?</h2>
@@ -110,9 +167,10 @@
             standard deviations (σ). Under the theory every painting's z is a standard bell curve, so
             every painting has the same chance to be the match.
           </p>
+          <p class="section-note" id="level-note" hidden></p>
         </header>
 
-        <div class="stats-grid">
+        <div class="stats-grid" id="chance-stats">
           <figure class="chart-card">
             <figcaption>
               <h3>Distribution of scores</h3>
@@ -138,9 +196,15 @@
           </div>
         </div>
 
+        <div class="mutation-card" id="mutation-stats" hidden>
+          <h3>The mutation monkey</h3>
+          <div class="mutation-figures" id="mutation-figures"></div>
+          <p id="mutation-text"></p>
+        </div>
+
         <figure class="chart-card wide">
           <figcaption>
-            <h3>Best of N: diminishing returns</h3>
+            <h3 id="bon-title">Best of N: diminishing returns</h3>
             <p class="muted" id="bon-sub">Best score so far against the number of monkeys (log scale)</p>
           </figcaption>
           <ul class="legend" id="bon-legend"></ul>
@@ -157,13 +221,98 @@
           <div id="odds-text"></div>
         </div>
       </section>
+
+      <section id="findings" class="findings" aria-labelledby="findings-title">
+        <header class="section-head">
+          <p class="eyebrow">Findings</p>
+          <h2 id="findings-title">What the collection looks like to a monkey</h2>
+          <p class="section-lede">
+            The monkey only knows ten colors: the ones a k-means clustering found in every pixel of the
+            downsampled collection. Which colors made the cut, and which paintings did, says as much
+            about the museum as about chance.
+          </p>
+        </header>
+
+        <h3 class="findings-h">The global palette</h3>
+        <ol class="swatches" id="swatches"></ol>
+        <p class="findings-text" id="palette-text"></p>
+
+        <div class="findings-grid">
+          <div>
+            <h3 class="findings-h">Which paintings stayed legible</h3>
+            <p class="findings-text" id="selection-text"></p>
+            <div class="table-scroll tall" id="selection-table"></div>
+          </div>
+          <div>
+            <h3 class="findings-h">When they were painted</h3>
+            <p class="findings-text muted small" id="era-text"></p>
+            <div id="era-table"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="about" class="about" aria-labelledby="about-title">
+        <header class="section-head">
+          <p class="eyebrow">About</p>
+          <h2 id="about-title">Monkeys, museums and chance</h2>
+        </header>
+        <div class="about-body">
+          <p>
+            The <strong>infinite monkey theorem</strong> says that a monkey hitting keys at random for
+            long enough will almost surely type any given text. Émile Borel used the image in 1913; in
+            1928 Arthur Eddington put it in a museum: <q>If an army of monkeys were strumming on
+            typewriters they might write all the books in the British Museum.</q> This site asks the
+            same of paintings, at the scale of a thumbnail. Even a 16 × 16 picture in ten colors has
+            10<sup>256</sup> possibilities, far more than there are atoms in the universe. Chance alone
+            never gets there, which the statistics above show live.
+          </p>
+          <p>
+            Artists have long used chance on purpose. Jean Arp dropped torn paper squares and glued them
+            where they fell (<cite>Collage with Squares Arranged according to the Laws of Chance</cite>,
+            1916–17). Ellsworth Kelly let chance procedures place the colored squares of
+            <cite>Spectrum Colors Arranged by Chance</cite> (1951–53). Gerhard Richter's color charts,
+            such as <cite>256 Farben</cite> (1974), set out 256 colors in a grid in random order: the
+            same number of cells as one of this monkey's grids. Those works are chance <em>framed</em> as art. The monkey runs
+            the opposite test: can chance land on art that already exists?
+          </p>
+          <p>
+            Richard Dawkins's <strong>weasel program</strong> (<cite>The Blind Watchmaker</cite>, 1986)
+            showed why cumulative selection beats single-step chance. Random letters almost never spell
+            <q>METHINKS IT IS LIKE A WEASEL</q>, but keeping the best of each generation of copies gets
+            there in a few dozen steps. The Mutation mode does the same with a painting: it reaches an
+            exact copy after tens of thousands of grids, where pure chance would need about
+            10<sup>256</sup>. The weasel knows its target, which is the point and the cheat. Evolution
+            has no target; the comparison is about how fast keeping partial successes compounds.
+          </p>
+          <p>
+            The best match after <em>n</em> tries grows slowly, roughly like √(2 ln <em>n</em>) standard
+            deviations above average. That is the <strong>extreme value statistics</strong> of Fisher,
+            Tippett and Gumbel. Each tenfold increase in monkeys buys less than the one before, and
+            because one grid is scored against all thousand paintings, those thousand comparisons
+            behave like only a few hundred independent tries.
+          </p>
+          <p>
+            Finally, the experiment has a point of view built in. A measure of pixel similarity treats
+            the empty silk of a Chinese or Japanese ink painting as missing information. In that
+            tradition, empty space is part of the composition. Making the grids legible meant dropping
+            most East Asian paintings, and the ten-color palette is the brown of oil paint, old varnish
+            and aged paper. The Findings above show what that leaves.
+          </p>
+          <p class="muted small">
+            Built with the <a href="https://github.com/harvardartmuseums/api-docs">Harvard Art Museums API</a>.
+            Source code, method and background:
+            <a href="https://github.com/scarlett-adams/image-generation">github.com/scarlett-adams/image-generation</a>.
+          </p>
+        </div>
+      </section>
     </main>
 
     <footer class="colophon">
       <p>
-        Artwork data and images from the
-        <a href="https://harvardartmuseums.org/collections/api">Harvard Art Museums API</a>.
-        Not affiliated with the Harvard Art Museums.
+        Artwork data and images courtesy of the
+        <a href="https://harvardartmuseums.org/collections/api">Harvard Art Museums</a>. Not affiliated
+        with the Harvard Art Museums. Images are used for study and are © President and Fellows of
+        Harvard College or the rights holders shown with each work.
       </p>
     </footer>
   </body>

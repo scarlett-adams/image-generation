@@ -140,18 +140,162 @@ export function uniformGrid(out, K, rand) {
   return out;
 }
 
+/**
+ * A color sampler: draws palette indices with probabilities `q` (uniform
+ * if omitted). Returned as a function of a uniform random number.
+ */
+export function makeSampler(q, K) {
+  if (!q) return (r) => (r * K) | 0;
+  const cum = new Float64Array(K);
+  let total = 0;
+  for (let c = 0; c < K; c++) {
+    total += q[c];
+    cum[c] = total;
+  }
+  return (r) => {
+    const x = r * total;
+    for (let c = 0; c < K - 1; c++) if (x < cum[c]) return c;
+    return K - 1;
+  };
+}
+
+/** Share of each palette color in work `w`. */
+export function colorShares(model, w) {
+  const q = new Float64Array(model.K);
+  const off = w * model.cells;
+  for (let i = 0; i < model.cells; i++) q[model.grids[off + i]]++;
+  for (let c = 0; c < model.K; c++) q[c] /= model.cells;
+  return q;
+}
+
+/** Average color shares over the whole collection. */
+export function collectionShares(model) {
+  const q = new Float64Array(model.K);
+  for (let i = 0; i < model.grids.length; i++) q[model.grids[i]]++;
+  for (let c = 0; c < model.K; c++) q[c] /= model.grids.length;
+  return q;
+}
+
+/**
+ * Level 1: smudged. Pixels are painted in reading order; each one copies
+ * its left or upper neighbor with probability `keep`, otherwise it gets a
+ * fresh color. Every pixel is still uniformly distributed on its own, but
+ * neighbors agree, so the grid forms blobs.
+ */
+export function smudgedGrid(out, size, sample, rand, keep = 0.8) {
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const r = rand();
+      if (r < keep && (x > 0 || y > 0)) {
+        const fromLeft = y === 0 || (x > 0 && rand() < 0.5);
+        out[i] = fromLeft ? out[i - 1] : out[i - size];
+      } else {
+        out[i] = sample(rand());
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Level 2: color fields. A ground color, then 2-6 rectangles of random
+ * size, position and color laid on top, like a sketch for a Rothko or a
+ * Mondrian.
+ */
+export function fieldsGrid(out, size, sample, rand) {
+  out.fill(sample(rand()));
+  const n = 2 + ((rand() * 5) | 0);
+  for (let k = 0; k < n; k++) {
+    const w = 1 + ((rand() * size) | 0);
+    const h = 1 + ((rand() * size) | 0);
+    const x0 = (rand() * (size - w + 1)) | 0;
+    const y0 = (rand() * (size - h + 1)) | 0;
+    const c = sample(rand());
+    for (let y = y0; y < y0 + h; y++) out.fill(c, y * size + x0, y * size + x0 + w);
+  }
+  return out;
+}
+
 export const LEVELS = [
   {
     level: 0,
     name: "Uniform noise",
     blurb: "Every pixel is an independent, uniformly random palette color.",
   },
+  {
+    level: 1,
+    name: "Smudged",
+    blurb: "Each pixel usually copies a neighbor, so colors form blobs. Every color is still equally likely.",
+  },
+  {
+    level: 2,
+    name: "Color fields",
+    blurb: "A ground color with a few random rectangles on top, like a sketch for a Rothko or a Mondrian.",
+  },
+  {
+    level: 3,
+    name: "Borrowed palette",
+    blurb: "Color fields painted with a real painting's colors, in its proportions (the target's, or a random painting's).",
+  },
 ];
 
-/** Fills `out` with a new grid from the monkey at `level`. */
-export function generate(level, out, model, rand) {
+/**
+ * Fills `out` with a new grid from the monkey at `level`. `sample` draws a
+ * palette index from a uniform random number (see makeSampler).
+ */
+export function generate(level, out, model, rand, sample) {
+  const draw = sample || ((r) => (r * model.K) | 0);
   switch (level) {
+    case 1:
+      return smudgedGrid(out, model.size, draw, rand);
+    case 2:
+    case 3:
+      return fieldsGrid(out, model.size, draw, rand);
     default:
-      return uniformGrid(out, model.K, rand);
+      return sample ? fillFrom(out, draw, rand) : uniformGrid(out, model.K, rand);
   }
+}
+
+function fillFrom(out, draw, rand) {
+  for (let i = 0; i < out.length; i++) out[i] = draw(rand());
+  return out;
+}
+
+/** A model holding only painting `w` (for a chosen target). */
+export function subModel(model, w) {
+  return { ...model, N: 1, grids: model.grids.slice(w * model.cells, (w + 1) * model.cells) };
+}
+
+// ---------------------------------------------------------------------------
+// The mutation monkey (Dawkins's weasel)
+// ---------------------------------------------------------------------------
+
+/**
+ * One generation of cumulative selection. Makes `brood` children of
+ * `parent`, each with about `rate` pixels changed (at least one), scores
+ * them against the single painting in `target` (a one-painting model), and
+ * returns the best child and its score. The caller keeps whichever of
+ * parent and child is better, so the score never gets worse.
+ */
+export function mutateGeneration(target, parent, brood, rate, sample, rand, child, bestOut) {
+  const cells = target.cells;
+  let bestSum = Infinity;
+  for (let b = 0; b < brood; b++) {
+    child.set(parent);
+    let changed = false;
+    for (let i = 0; i < cells; i++) {
+      if (rand() < rate / cells) {
+        child[i] = sample(rand());
+        changed = true;
+      }
+    }
+    if (!changed) child[(rand() * cells) | 0] = sample(rand());
+    const s = scoreAgainst(target, child, 0);
+    if (s < bestSum) {
+      bestSum = s;
+      bestOut.set(child);
+    }
+  }
+  return bestSum;
 }
