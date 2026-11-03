@@ -31,7 +31,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -82,23 +83,42 @@ def redact(text: str) -> str:
     return re.sub(r"apikey=[^&\s]+", "apikey=REDACTED", str(text))
 
 
+class FetchError(RuntimeError):
+    """A failed GET. `reason` is short ("HTTP 403", "timed out") for tallying."""
+
+    def __init__(self, url: str, reason: str):
+        super().__init__(redact(f"GET {url} failed: {reason}"))
+        self.reason = reason
+
+
+def _reason(e: Exception) -> str:
+    if isinstance(e, urllib.error.HTTPError):
+        return f"HTTP {e.code}"
+    if isinstance(e, urllib.error.URLError):
+        e = e.reason if isinstance(e.reason, Exception) else e
+    if isinstance(e, TimeoutError) or "timed out" in str(e):
+        return "timed out"
+    return redact(f"{type(e).__name__}: {e}")[:80]
+
+
 def http_get(url: str, timeout: float = 30, retries: int = 3) -> bytes:
-    """GET with retries and exponential backoff. Raises on final failure."""
-    last: Exception | None = None
+    """GET with retries and exponential backoff. Raises FetchError on final failure."""
+    reason = "no attempts"
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read()
         except urllib.error.HTTPError as e:
-            last = e
+            reason = _reason(e)
             # 4xx other than 429 won't get better by retrying.
             if 400 <= e.code < 500 and e.code != 429:
                 break
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-            last = e
-        time.sleep(1.5 * 2**attempt)
-    raise RuntimeError(redact(f"GET {url} failed: {last}"))
+        except (urllib.error.URLError, OSError) as e:
+            reason = _reason(e)
+        if attempt < retries - 1:
+            time.sleep(1.5 * 2**attempt)
+    raise FetchError(url, reason)
 
 
 def clean(value: object) -> str | None:
@@ -120,18 +140,20 @@ def artist_of(record: dict) -> str | None:
 
 
 def small_image_urls(record: dict, px: int) -> list[str]:
-    """Candidate URLs for a small (<= px on the long side) version of the image."""
+    """Candidate URLs for a small (<= px on the long side) version of the image:
+    the IIIF image service first (one request), then the primary image URL,
+    which redirects to the same service."""
     urls = []
-    primary = record.get("primaryimageurl")
-    if primary:
-        parts = urllib.parse.urlsplit(primary)
-        query = urllib.parse.urlencode({"width": px, "height": px})
-        urls.append(urllib.parse.urlunsplit(parts._replace(query=query)))
     for image in record.get("images") or []:
         base = image.get("iiifbaseuri")
         if base:
             urls.append(f"{base.rstrip('/')}/full/!{px},{px}/0/default.jpg")
             break
+    primary = record.get("primaryimageurl")
+    if primary:
+        parts = urllib.parse.urlsplit(primary)
+        query = urllib.parse.urlencode({"width": px, "height": px})
+        urls.append(urllib.parse.urlunsplit(parts._replace(query=query)))
     return urls
 
 
@@ -189,24 +211,91 @@ def fetch_records(api_key: str, count: int, seed: int) -> list[dict]:
 # --------------------------------------------------------------------------
 
 
-def load_image(record: dict, cache_dir: Path | None, px: int) -> Image.Image | None:
+def load_image(record: dict, cache_dir: Path | None, px: int) -> tuple[Image.Image | None, str]:
+    """(image, "") on success, (None, reason) if no candidate URL worked."""
     path = cache_dir / f"{record['id']}.jpg" if cache_dir else None
     if path and path.exists():
         try:
-            return Image.open(path).convert("RGB")
+            return Image.open(path).convert("RGB"), ""
         except OSError:
             path.unlink(missing_ok=True)
+    reason = "no image URL"
     for url in small_image_urls(record, px):
         try:
-            data = http_get(url, timeout=30, retries=2)
+            data = http_get(url, timeout=20, retries=2)
+        except FetchError as e:
+            reason = e.reason
+            continue
+        try:
             image = Image.open(io.BytesIO(data))
             image.load()
-        except (RuntimeError, OSError):
+        except OSError:
+            reason = "not an image"
             continue
         if path:
             path.write_bytes(data)
-        return image.convert("RGB")
-    return None
+        return image.convert("RGB"), ""
+    return None, reason
+
+
+def download_images(
+    records: list[dict],
+    need: int,
+    cache_dir: Path | None,
+    px: int,
+    workers: int,
+    budget_s: float,
+) -> list[tuple[dict, Image.Image]]:
+    """Downloads images in parallel until `need` succeed, the records run out,
+    or `budget_s` seconds pass. Prints progress, and gives up early if the
+    first images all fail (the reasons are printed). Keeps API order."""
+    start = time.monotonic()
+    results: dict[int, Image.Image] = {}
+    failures: Counter[str] = Counter()
+    pending = iter(enumerate(records))
+    done = 0
+    out_of_time = False
+
+    def top_reasons() -> str:
+        return ", ".join(f"{r} ({n})" for r, n in failures.most_common(3)) or "none"
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        running = {}
+
+        def submit_next() -> None:
+            nxt = next(pending, None)
+            if nxt is not None:
+                i, record = nxt
+                running[pool.submit(load_image, record, cache_dir, px)] = i
+
+        for _ in range(workers * 2):
+            submit_next()
+        while running:
+            finished, _ = wait(running, timeout=30, return_when=FIRST_COMPLETED)
+            elapsed = time.monotonic() - start
+            if not finished:
+                log(f"  still downloading... {len(results)} ok, {sum(failures.values())} failed, {elapsed:.0f}s")
+            for future in finished:
+                i = running.pop(future)
+                image, reason = future.result()
+                done += 1
+                if image is not None:
+                    results[i] = image
+                else:
+                    failures[reason] += 1
+                if done % 100 == 0:
+                    log(f"  {done} tried: {len(results)} ok, {sum(failures.values())} failed, {elapsed:.0f}s")
+                if done >= 50 and not results:
+                    raise RuntimeError(f"the first {done} images all failed to download: {top_reasons()}")
+                if len(results) + len(running) < need and elapsed < budget_s:
+                    submit_next()
+            if elapsed >= budget_s and running and not out_of_time:
+                out_of_time = True
+                log(f"  download time budget ({budget_s:.0f}s) used up; finishing the {len(running)} in flight")
+
+    elapsed = time.monotonic() - start
+    log(f"  {len(results)} images ready, {sum(failures.values())} failed ({top_reasons()}), {elapsed:.0f}s")
+    return [(records[i], results[i]) for i in sorted(results)][:need]
 
 
 def downsample(image: Image.Image, size: int) -> np.ndarray:
@@ -388,6 +477,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=1874, help="seed for the API's random sample and k-means")
     p.add_argument("--image-px", type=int, default=128, help="size of the downloaded images (default: 128)")
     p.add_argument("--workers", type=int, default=16, help="parallel image downloads (default: 16)")
+    p.add_argument("--download-budget", type=float, default=900,
+                   help="stop starting new image downloads after this many seconds (default: 900)")
     p.add_argument("--out-dir", type=Path, default=ROOT / "public")
     p.add_argument("--cache-dir", default=str(ROOT / ".cache" / "images"),
                    help="where downloaded images are kept between runs ('' to disable)")
@@ -413,21 +504,17 @@ def main(argv: list[str] | None = None) -> int:
         log("The API returned no usable records.")
         return 1
 
-    log(f"Downloading {len(records)} small images ({args.image_px}px)...")
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        loaded = list(pool.map(lambda r: load_image(r, cache_dir, args.image_px), records))
-
-    kept_records, kept_images = [], []
-    for record, image in zip(records, loaded):
-        if image is not None:
-            kept_records.append(record)
-            kept_images.append(image)
-        if len(kept_records) >= args.count:
-            break
-    failed = sum(1 for im in loaded if im is None)
-    log(f"  {len(kept_records)} images ready, {failed} could not be downloaded")
-    if len(kept_records) < args.colors:
-        log("Too few images to build a palette.")
+    log(f"Downloading small images ({args.image_px}px) for {len(records)} records...")
+    try:
+        kept = download_images(records, args.count, cache_dir, args.image_px,
+                               args.workers, args.download_budget)
+    except RuntimeError as e:
+        log(f"Could not download images: {e}")
+        return 1
+    kept_records = [r for r, _ in kept]
+    kept_images = [im for _, im in kept]
+    if len(kept_records) < max(args.colors, min(100, args.count)):
+        log(f"Only {len(kept_records)} images downloaded; too few to build a meaningful palette.")
         return 1
 
     largest = sizes[0]

@@ -142,9 +142,51 @@ class ApiTests(unittest.TestCase):
         r = {"primaryimageurl": "https://nrs.harvard.edu/urn-3:HUAM:123",
              "images": [{"iiifbaseuri": "https://ids.lib.harvard.edu/ids/iiif/42"}]}
         self.assertEqual(bg.small_image_urls(r, 128), [
-            "https://nrs.harvard.edu/urn-3:HUAM:123?width=128&height=128",
             "https://ids.lib.harvard.edu/ids/iiif/42/full/!128,128/0/default.jpg",
+            "https://nrs.harvard.edu/urn-3:HUAM:123?width=128&height=128",
         ])
+
+    def test_downloads_stop_once_enough_succeed(self):
+        records = [{"id": i, "primaryimageurl": f"https://img/{i}"} for i in range(200)]
+        fetched = []
+
+        def get(url, **kw):
+            fetched.append(url)
+            buf = io.BytesIO()
+            solid((100, 50, 20)).save(buf, "JPEG")
+            return buf.getvalue()
+
+        with mock.patch.object(bg, "http_get", get), mock.patch.object(bg, "log"):
+            kept = bg.download_images(records, need=20, cache_dir=None, px=64, workers=4, budget_s=60)
+        self.assertEqual([r["id"] for r, _ in kept], list(range(20)))  # API order kept
+        self.assertLess(len(fetched), 40)  # didn't download all 200
+
+    def test_downloads_fail_fast_with_reasons(self):
+        records = [{"id": i, "primaryimageurl": f"https://img/{i}"} for i in range(500)]
+
+        def get(url, **kw):
+            raise bg.FetchError(url, "HTTP 403")
+
+        with mock.patch.object(bg, "http_get", get), mock.patch.object(bg, "log"):
+            with self.assertRaisesRegex(RuntimeError, r"all failed.*HTTP 403"):
+                bg.download_images(records, need=400, cache_dir=None, px=64, workers=4, budget_s=60)
+
+    def test_failed_downloads_are_replaced_by_spares(self):
+        records = [{"id": i, "primaryimageurl": f"https://img/{i}"} for i in range(30)]
+
+        def get(url, **kw):
+            if int(url.split("/")[3].split("?")[0]) % 3 == 0:
+                raise bg.FetchError(url, "timed out")
+            buf = io.BytesIO()
+            solid((10, 20, 30)).save(buf, "JPEG")
+            return buf.getvalue()
+
+        logs = []
+        with mock.patch.object(bg, "http_get", get), mock.patch.object(bg, "log", lambda *a: logs.append(a)):
+            kept = bg.download_images(records, need=15, cache_dir=None, px=64, workers=3, budget_s=60)
+        self.assertEqual(len(kept), 15)
+        self.assertTrue(all(r["id"] % 3 for r, _ in kept))
+        self.assertIn("timed out", " ".join(map(str, logs[-1])))
 
     def test_redact(self):
         self.assertEqual(bg.redact("GET https://x/object?apikey=abc-123&page=2 failed"),

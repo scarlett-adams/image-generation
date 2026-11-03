@@ -9,5 +9,5 @@
     "grids": "python3 scripts/build_grids.py --size 16 8",
     "dev": "vercel dev"
   },
-  "engines": { "node": ">=20" }
+  "engines": { "node": "22.x" }
 }
