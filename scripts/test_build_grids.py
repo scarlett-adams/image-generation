@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -187,6 +188,48 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(kept), 15)
         self.assertTrue(all(r["id"] % 3 for r, _ in kept))
         self.assertIn("timed out", " ".join(map(str, logs[-1])))
+
+    def test_refusal_details_come_from_the_real_http_response(self):
+        import http.server
+        import threading
+
+        class Refuse(http.server.BaseHTTPRequestHandler):
+            server_version = "cloudflare"
+            sys_version = ""
+
+            def do_GET(self):
+                body = b"<html><head><style>x{}</style></head><body><h1>Access denied</h1> bots go away</body></html>"
+                self.send_response(403)
+                self.send_header("cf-mitigated", "challenge")
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Refuse)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/iiif/1/full/!128,128/0/default.jpg?apikey=SECRET"
+            with self.assertRaises(bg.FetchError) as caught:
+                bg.http_get(url, timeout=5, retries=1)
+            e = caught.exception
+            self.assertEqual(e.reason, "HTTP 403")
+            self.assertIn("server=cloudflare", e.detail)
+            self.assertIn("cf-mitigated=challenge", e.detail)
+            self.assertIn('body="Access denied bots go away"', e.detail)
+            self.assertNotIn("SECRET", str(e))
+
+            bg.FIRST_FAILURES.clear()
+            image, reason = bg.load_image({"id": 1, "primaryimageurl": url}, None, 64)
+            self.assertIsNone(image)
+            self.assertEqual(reason, "127.0.0.1: HTTP 403")
+            examples = bg.failure_examples(Counter({reason: 3}))
+            self.assertIn("cf-mitigated=challenge", examples)
+        finally:
+            server.shutdown()
 
     def test_redact(self):
         self.assertEqual(bg.redact("GET https://x/object?apikey=abc-123&page=2 failed"),

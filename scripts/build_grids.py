@@ -84,11 +84,31 @@ def redact(text: str) -> str:
 
 
 class FetchError(RuntimeError):
-    """A failed GET. `reason` is short ("HTTP 403", "timed out") for tallying."""
+    """A failed GET. `reason` is short ("HTTP 403", "timed out") for tallying;
+    `detail` describes the server's response, for diagnosing refusals."""
 
-    def __init__(self, url: str, reason: str):
+    def __init__(self, url: str, reason: str, detail: str = ""):
         super().__init__(redact(f"GET {url} failed: {reason}"))
         self.reason = reason
+        self.detail = detail
+
+
+def _describe_refusal(e: urllib.error.HTTPError) -> str:
+    """Which server refused, and what it said (headers + start of the body)."""
+    headers = e.headers or {}
+    parts = [f"server={headers.get('Server', '?')}"]
+    for name in ("cf-mitigated", "cf-ray", "x-amzn-waf-action", "x-cache", "via", "content-type"):
+        if headers.get(name):
+            parts.append(f"{name}={headers.get(name)}")
+    try:
+        body = e.read(2000).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - best effort diagnostics only
+        body = ""
+    body = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", body, flags=re.S | re.I)
+    body = " ".join(re.sub(r"<[^>]+>", " ", body).split())
+    if body:
+        parts.append(f'body="{body[:240]}"')
+    return redact(" ".join(parts))
 
 
 def _reason(e: Exception) -> str:
@@ -103,7 +123,7 @@ def _reason(e: Exception) -> str:
 
 def http_get(url: str, timeout: float = 30, retries: int = 3) -> bytes:
     """GET with retries and exponential backoff. Raises FetchError on final failure."""
-    reason = "no attempts"
+    reason, detail = "no attempts", ""
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -111,14 +131,16 @@ def http_get(url: str, timeout: float = 30, retries: int = 3) -> bytes:
                 return resp.read()
         except urllib.error.HTTPError as e:
             reason = _reason(e)
+            detail = _describe_refusal(e)
             # 4xx other than 429 won't get better by retrying.
             if 400 <= e.code < 500 and e.code != 429:
                 break
         except (urllib.error.URLError, OSError) as e:
             reason = _reason(e)
+            detail = ""
         if attempt < retries - 1:
             time.sleep(1.5 * 2**attempt)
-    raise FetchError(url, reason)
+    raise FetchError(url, reason, detail)
 
 
 def clean(value: object) -> str | None:
@@ -211,31 +233,48 @@ def fetch_records(api_key: str, count: int, seed: int) -> list[dict]:
 # --------------------------------------------------------------------------
 
 
+# First example of each kind of failure ("host: reason" -> URL and server
+# response), printed when downloads fail so refusals can be diagnosed.
+FIRST_FAILURES: dict[str, str] = {}
+
+
 def load_image(record: dict, cache_dir: Path | None, px: int) -> tuple[Image.Image | None, str]:
-    """(image, "") on success, (None, reason) if no candidate URL worked."""
+    """(image, "") on success, (None, reason) if no candidate URL worked.
+    The reason lists each URL's failure, e.g. "ids.lib.harvard.edu: HTTP 403"."""
     path = cache_dir / f"{record['id']}.jpg" if cache_dir else None
     if path and path.exists():
         try:
             return Image.open(path).convert("RGB"), ""
         except OSError:
             path.unlink(missing_ok=True)
-    reason = "no image URL"
+    reasons = []
     for url in small_image_urls(record, px):
+        host = urllib.parse.urlsplit(url).hostname or "?"
         try:
             data = http_get(url, timeout=20, retries=2)
         except FetchError as e:
-            reason = e.reason
+            key = f"{host}: {e.reason}"
+            FIRST_FAILURES.setdefault(key, f"{url} {e.detail}".strip())
+            reasons.append(key)
             continue
         try:
             image = Image.open(io.BytesIO(data))
             image.load()
         except OSError:
-            reason = "not an image"
+            key = f"{host}: not an image"
+            FIRST_FAILURES.setdefault(key, url)
+            reasons.append(key)
             continue
         if path:
             path.write_bytes(data)
         return image.convert("RGB"), ""
-    return None, reason
+    return None, " + ".join(reasons) or "no image URL"
+
+
+def failure_examples(reasons: Counter) -> str:
+    """One example URL and server response per failure kind, for the log."""
+    kinds = {k for r in reasons for k in r.split(" + ")}
+    return "".join(f"\n    e.g. {k}: {FIRST_FAILURES[k]}" for k in sorted(kinds) if k in FIRST_FAILURES)
 
 
 def download_images(
@@ -286,7 +325,10 @@ def download_images(
                 if done % 100 == 0:
                     log(f"  {done} tried: {len(results)} ok, {sum(failures.values())} failed, {elapsed:.0f}s")
                 if done >= 50 and not results:
-                    raise RuntimeError(f"the first {done} images all failed to download: {top_reasons()}")
+                    raise RuntimeError(
+                        f"the first {done} images all failed to download: {top_reasons()}"
+                        + failure_examples(failures)
+                    )
                 if len(results) + len(running) < need and elapsed < budget_s:
                     submit_next()
             if elapsed >= budget_s and running and not out_of_time:
@@ -294,7 +336,8 @@ def download_images(
                 log(f"  download time budget ({budget_s:.0f}s) used up; finishing the {len(running)} in flight")
 
     elapsed = time.monotonic() - start
-    log(f"  {len(results)} images ready, {sum(failures.values())} failed ({top_reasons()}), {elapsed:.0f}s")
+    log(f"  {len(results)} images ready, {sum(failures.values())} failed ({top_reasons()}), {elapsed:.0f}s"
+        + (failure_examples(failures) if failures else ""))
     return [(records[i], results[i]) for i in sorted(results)][:need]
 
 
