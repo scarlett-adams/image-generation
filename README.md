@@ -5,7 +5,7 @@ with tiny versions of real paintings from the Harvard Art Museums. How close
 can chance get to art, and how much faster does it get there when good
 guesses are kept?**
 
-**Live site: LIVE_URL**
+**Live site: <https://image-generation-blush.vercel.app>**
 
 ![The experiment: the monkey's latest grid, its best grid so far, and the closest painting as a 16 × 16 grid](docs/gallery.png)
 
