@@ -44,6 +44,13 @@
           <select id="level"></select>
         </label>
         <label class="field">
+          <span>Rank matches by</span>
+          <select id="rank">
+            <option value="similarity" selected>Similarity</option>
+            <option value="surprise">Surprise</option>
+          </select>
+        </label>
+        <label class="field">
           <span>Grid</span>
           <select id="size">
             <option value="16" selected>16 × 16</option>
@@ -86,6 +93,69 @@
             <p class="label-meta" id="closest-culture"></p>
           </figcaption>
         </figure>
+      </section>
+
+      <section class="stats" aria-labelledby="stats-title">
+        <header class="section-head">
+          <p class="eyebrow">The statistics</p>
+          <h2 id="stats-title">How close does chance get?</h2>
+          <p class="section-lede" id="stats-lede">
+            Every grid the monkey paints is scored against every painting. Theory predicts what those
+            scores should look like; here is how the monkey compares.
+          </p>
+          <p class="section-note" id="rank-note" hidden>
+            <strong>Ranking by surprise.</strong> A flat, mid-toned painting scores well against any noise, so
+            raw similarity keeps picking the same few. Surprise asks instead how unusual a score is
+            <em>for that painting</em>: z = (similarity − its average against noise) ÷ its spread, in
+            standard deviations (σ). Under the theory every painting's z is a standard bell curve, so
+            every painting has the same chance to be the match.
+          </p>
+        </header>
+
+        <div class="stats-grid">
+          <figure class="chart-card">
+            <figcaption>
+              <h3>Distribution of scores</h3>
+              <p class="muted" id="hist-sub">Share of results at each similarity</p>
+            </figcaption>
+            <ul class="legend" id="hist-legend"></ul>
+            <div class="chart" id="hist-chart"></div>
+            <details class="table-view" id="hist-details">
+              <summary>Show as a table</summary>
+              <div class="table-scroll" id="hist-table"></div>
+            </details>
+          </figure>
+
+          <div class="compare-card">
+            <h3>Expected vs. observed</h3>
+            <table class="compare">
+              <thead>
+                <tr><th scope="col">Measure</th><th scope="col">Theory</th><th scope="col">Observed</th></tr>
+              </thead>
+              <tbody id="compare-body"></tbody>
+            </table>
+            <p class="muted small" id="compare-note"></p>
+          </div>
+        </div>
+
+        <figure class="chart-card wide">
+          <figcaption>
+            <h3>Best of N: diminishing returns</h3>
+            <p class="muted" id="bon-sub">Best score so far against the number of monkeys (log scale)</p>
+          </figcaption>
+          <ul class="legend" id="bon-legend"></ul>
+          <div class="chart" id="bon-chart"></div>
+          <p class="chart-note" id="bon-note"></p>
+          <details class="table-view" id="bon-details">
+            <summary>Show as a table</summary>
+            <div class="table-scroll" id="bon-table"></div>
+          </details>
+        </figure>
+
+        <div class="odds">
+          <h3>The odds of an exact copy</h3>
+          <div id="odds-text"></div>
+        </div>
       </section>
     </main>
 

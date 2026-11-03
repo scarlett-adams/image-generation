@@ -2,6 +2,7 @@
    pictures, small wall labels. */
 
 :root {
+  color-scheme: light;
   --wall: #f5f2ec;
   --wall-deep: #ebe6dc;
   --ink: #1f1c18;
@@ -12,6 +13,12 @@
   --accent: #8b2e1f;
   --notice-bg: #fbeee9;
   --notice-ink: #7a2516;
+
+  /* Chart series (validated for color-vision deficiency on --wall) */
+  --series-pairs: #2f6fae;
+  --series-match: #c0502e;
+  --grid-line: #e2dcd0;
+  --card: #faf8f4;
 
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -260,6 +267,298 @@ select:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- Stats ------------------------------------------------------------- */
+
+.stats {
+  margin-top: 72px;
+  padding-top: 32px;
+  border-top: 1px solid var(--rule);
+}
+
+.section-head {
+  max-width: 720px;
+  margin-bottom: 28px;
+}
+.section-head h2 {
+  margin: 6px 0 10px;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(28px, 4vw, 38px);
+  line-height: 1.15;
+}
+.section-lede {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 18px;
+  color: #3b362f;
+}
+.section-note {
+  margin: 16px 0 0;
+  padding: 12px 16px;
+  background: var(--card);
+  border-left: 2px solid var(--frame);
+  font-size: 15px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.chart-card,
+.compare-card,
+.odds {
+  margin: 0;
+  min-width: 0;
+}
+.chart-card.wide {
+  margin-top: 40px;
+}
+.chart-card h3,
+.compare-card h3,
+.odds h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.chart-card figcaption p {
+  margin: 0;
+  font-size: 14px;
+}
+.small {
+  font-size: 13px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 12px 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+}
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A short stroke keying a series; dashed = predicted; wash = filled area. */
+.chart-key {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 0;
+  border-top: 2px solid var(--key);
+}
+.chart-key.dashed {
+  border-top-style: dashed;
+}
+.chart-key.wash {
+  height: 10px;
+  border: 2px solid var(--key);
+  border-bottom: 0;
+  background: color-mix(in srgb, var(--key) 12%, transparent);
+}
+
+.chart {
+  position: relative;
+  width: 100%;
+  min-height: 240px;
+}
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: var(--sans);
+}
+.chart-grid line {
+  stroke: var(--grid-line);
+  stroke-width: 1;
+}
+.chart-grid .chart-baseline {
+  stroke: #b9b1a3;
+}
+.chart-tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.chart-line.dashed {
+  stroke-dasharray: 5 4;
+  stroke-linecap: butt;
+}
+.chart-wash {
+  opacity: 0.1;
+  stroke: none;
+}
+.chart-dot {
+  stroke: var(--wall);
+  stroke-width: 2;
+}
+.chart-end-label {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  /* a halo in the wall color keeps labels readable where lines cross them */
+  paint-order: stroke;
+  stroke: var(--wall);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.chart-cross {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+.chart-hit {
+  cursor: crosshair;
+  outline: none;
+}
+
+.chart-tip {
+  position: absolute;
+  z-index: 2;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 8px 10px;
+  background: var(--mat);
+  border: 1px solid var(--rule);
+  box-shadow: 0 6px 18px -8px rgb(0 0 0 / 0.3);
+  font-size: 12px;
+  pointer-events: none;
+}
+.chart-tip p {
+  margin: 0;
+}
+.chart-tip-title {
+  margin-bottom: 4px !important;
+  color: var(--muted);
+}
+.chart-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.6;
+}
+.chart-tip-row strong {
+  font-variant-numeric: tabular-nums;
+}
+.chart-tip-row span:last-child {
+  color: var(--muted);
+}
+
+.chart-note {
+  max-width: 760px;
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: #3b362f;
+}
+
+.table-view {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.table-view summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.table-scroll {
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 8px;
+}
+
+.data-table,
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.data-table th,
+.data-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--grid-line);
+  text-align: right;
+  white-space: nowrap;
+}
+.data-table th:first-child,
+.data-table td:first-child {
+  text-align: left;
+}
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--wall);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.compare-card {
+  padding-top: 2px;
+}
+.compare {
+  margin: 12px 0;
+  font-size: 14px;
+}
+.compare th,
+.compare td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--grid-line);
+  text-align: right;
+  vertical-align: top;
+}
+.compare thead th {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.compare th[scope="row"],
+.compare thead th:first-child {
+  text-align: left;
+  font-weight: 400;
+}
+.compare td {
+  white-space: nowrap;
+}
+
+.odds {
+  max-width: 760px;
+  margin-top: 40px;
+  padding: 20px 24px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+}
+.odds p {
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-size: 17px;
+}
+.power sup {
+  font-size: 0.7em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* ---- Footer ------------------------------------------------------------- */
 
 .colophon {
@@ -272,6 +571,12 @@ select:focus-visible,
 }
 
 /* ---- Small screens ------------------------------------------------------ */
+
+@media (max-width: 900px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 @media (max-width: 760px) {
   .masthead {
@@ -293,6 +598,12 @@ select:focus-visible,
   }
   .lede {
     font-size: 17px;
+  }
+  .odds {
+    padding: 16px;
+  }
+  .compare {
+    font-size: 13px;
   }
 }
 

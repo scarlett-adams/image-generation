@@ -13,6 +13,11 @@ each one to tiny quantized versions of real paintings from the
 scripts/build_grids.py   data pipeline: fetch paintings, fit palette, write grids
 scripts/vercel-build.sh  Vercel build step (runs the pipeline with the env var key)
 public/                  the site (static): index.html, style.css, js/
+public/js/core.js        palette distances, similarity scoring, monkey generators
+public/js/stats.js       theory (expected scores, best-of-N), running tallies, odds
+public/js/charts.js      the SVG histogram and best-of-N charts
+public/js/worker.js      the monkey loop (a Web Worker)
+public/js/app.js         the page: controls, gallery, stats panel
 public/grids.json        16x16 grids + palette (built by the pipeline)
 public/grids-8.json      8x8 grids, same palette
 test/                    JS unit tests (node --test)
