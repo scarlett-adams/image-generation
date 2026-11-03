@@ -94,6 +94,14 @@ function drawGrid(canvas, grid, size) {
   ctx.putImageData(img, 0, 0);
 }
 
+/** Shows a grid in a painting's real proportions (width / height), fitted
+ * inside the square box. */
+function setAspect(canvas, aspect) {
+  const a = aspect > 0 ? aspect : 1;
+  canvas.style.width = `${Math.min(1, a) * 100}%`;
+  canvas.style.height = `${Math.min(1, 1 / a) * 100}%`;
+}
+
 function clearCanvas(canvas) {
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
 }
@@ -137,7 +145,8 @@ function render() {
     $("best-score").textContent = `${pct(b.sim)} similar`;
     $("best-meta").textContent = `${pct(b.exact, 0)} of pixels exactly right · found by monkey #${nf.format(b.at)}`;
     const w = work(b.work);
-    drawGrid($("closest"), state.data.works[b.work].grid, size);
+    drawGrid($("closest"), w.grid, size);
+    setAspect($("closest"), w.aspect);
     $("closest-artist").textContent = artistLine(w);
     $("closest-title").textContent = w.title;
     $("closest-dated").textContent = w.dated ? `, ${w.dated}` : "";

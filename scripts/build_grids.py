@@ -2,13 +2,20 @@
 """Build public/grids.json: tiny quantized versions of Harvard Art Museums paintings.
 
 Steps:
-  1. Fetch paintings with images from the Harvard Art Museums API.
+  1. Fetch paintings with images from the Harvard Art Museums API (all of
+     them by default, in the API's seeded random order).
   2. Download a small version of each image.
   3. Downsample each image to an N x N grid.
   4. Fit ONE global palette with k-means in CIE Lab space, using every pixel
-     of every downsampled image.
-  5. Map each pixel to its nearest palette color (Lab distance) and write
-     grids.json: {palette, works: [{id, title, artist, culture, dated, grid}]}.
+     of the downsampled collection.
+  5. Keep only paintings that are still legible as a grid (see Rules): not
+     one flat color, several colors, some light/dark contrast, and not so
+     tall or wide that squeezing into a square wrecks the composition. The
+     first --count legible paintings are kept, the palette is refitted to
+     them, and this repeats until the selection settles.
+  6. Map each pixel to its nearest palette color (Lab distance) and write
+     grids.json: {palette, works: [{id, title, artist, culture, dated, aspect,
+     grid}], selection: {...what the filter removed...}}.
 
 The API key is read from the HARVARD_API_KEY environment variable, or from a
 .env file in the repo root. It is never printed or written to the output.
@@ -17,6 +24,8 @@ Usage:
   python scripts/build_grids.py                 # 16x16 -> public/grids.json
   python scripts/build_grids.py --size 8        # 8x8   -> public/grids-8.json
   python scripts/build_grids.py --size 16 8     # both, sharing one palette
+  python scripts/build_grids.py --max-dominant 1 --min-colors 1 --min-contrast 0 --max-aspect 99
+                                                # no legibility filter
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from dataclasses import dataclass
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -184,16 +194,16 @@ def small_image_urls(record: dict, px: int) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def fetch_records(api_key: str, count: int, seed: int) -> list[dict]:
-    """Up to `count` usable painting records, deduplicated, in API order.
+def fetch_records(api_key: str, limit: int | None, seed: int, max_pages: int = 100) -> list[dict]:
+    """Usable painting records (all of them, or the first `limit`),
+    deduplicated, in API order.
 
-    The API's random sort is seeded, so the same seed gives the same sample.
+    The API's random sort is seeded, so the same seed gives the same order.
     """
     records: list[dict] = []
     seen: set[int] = set()
-    want = count + max(20, count // 10)  # spares, in case some images fail
+    want = limit or float("inf")
     page = 1
-    max_pages = 3 + (want * 2) // PAGE_SIZE  # some records get filtered out
     while len(records) < want and page <= max_pages:
         params = {
             "apikey": api_key,
@@ -225,7 +235,7 @@ def fetch_records(api_key: str, count: int, seed: int) -> list[dict]:
         if pages and page >= pages:
             break
         page += 1
-    return records[:want]
+    return records[:limit] if limit else records
 
 
 # --------------------------------------------------------------------------
@@ -449,40 +459,144 @@ def to_hex(rgb: np.ndarray) -> str:
 # --------------------------------------------------------------------------
 
 
+@dataclass
+class Rules:
+    """When is a painting still legible as a small grid?"""
+
+    max_dominant: float = 0.5  # no palette color covers more than this share of cells
+    min_colors: int = 5  # at least this many palette colors appear
+    min_contrast: float = 10.0  # std of L* (lightness, 0-100) across cells
+    max_aspect: float = 1.5  # long side at most this many times the short side
+
+    def shape_ok(self, aspect: float) -> bool:
+        return 1 / self.max_aspect <= aspect <= self.max_aspect
+
+
+def fit_palette(lab: np.ndarray, n_colors: int, seed: int, max_pixels: int = 300_000):
+    """k-means palette for (n, 3) Lab pixels, most common color first.
+    Returns (centroids, share of pixels nearest each centroid)."""
+    sample = lab
+    if len(lab) > max_pixels:
+        sample = lab[np.random.default_rng(seed).choice(len(lab), max_pixels, replace=False)]
+    centroids, _, _ = kmeans(sample, n_colors, seed=seed)
+    counts = np.bincount(nearest(lab, centroids), minlength=n_colors)
+    order = np.argsort(-counts, kind="stable")
+    return centroids[order], counts[order] / counts.sum()
+
+
+def legibility(lab_grid: np.ndarray, idx: np.ndarray, n_colors: int) -> tuple[float, int, float]:
+    """(dominant color share, number of colors used, L* contrast) for one
+    painting: its Lab cells and their palette indices."""
+    counts = np.bincount(idx, minlength=n_colors)
+    return float(counts.max() / len(idx)), int((counts > 0).sum()), float(lab_grid[:, 0].std())
+
+
+def select_works(lab_grids: list[np.ndarray], aspects: list[float], count: int,
+                 n_colors: int, seed: int, rules: Rules, max_rounds: int = 4):
+    """Chooses the first `count` legible paintings (list order) and a palette
+    fitted to them. Legibility depends on the palette and the palette on the
+    selection, so this alternates until the selection stops changing.
+
+    Returns (selected indices, centroids, share, per-work stats, per-work pass flags).
+    """
+    n = len(lab_grids)
+    candidates = [i for i in range(n) if rules.shape_ok(aspects[i])]
+    selected = candidates
+    stable = False
+    for round_ in range(1, max_rounds + 1):
+        pixels = np.concatenate([lab_grids[i] for i in selected]) if selected else np.zeros((0, 3))
+        if len(pixels) < n_colors:
+            raise ValueError("too few paintings to fit a palette; loosen the legibility rules")
+        log(f"  round {round_}: fitting the palette to {len(selected)} paintings ({len(pixels):,} pixels)...")
+        centroids, share = fit_palette(pixels, n_colors, seed)
+        stats = [legibility(g, nearest(g, centroids), n_colors) for g in lab_grids]
+        passes = [
+            rules.shape_ok(aspects[i])
+            and stats[i][0] <= rules.max_dominant
+            and stats[i][1] >= rules.min_colors
+            and stats[i][2] >= rules.min_contrast
+            for i in range(n)
+        ]
+        new = [i for i in range(n) if passes[i]][:count]
+        log(f"           {sum(passes)} legible, keeping {len(new)}")
+        if new == selected:
+            stable = True
+            break
+        selected = new
+    if not stable:
+        # Refit to the final selection; a few marginal works may now sit just
+        # outside the rules, which is reported below.
+        centroids, share = fit_palette(np.concatenate([lab_grids[i] for i in selected]), n_colors, seed)
+        stats = [legibility(g, nearest(g, centroids), n_colors) for g in lab_grids]
+        off = sum(1 for i in selected if stats[i][0] > rules.max_dominant or stats[i][1] < rules.min_colors)
+        log(f"  selection still shifting after {max_rounds} rounds; {off} kept works are now marginal")
+    return selected, centroids, share, stats, passes
+
+
+def selection_report(records: list[dict], aspects: list[float], stats, passes, selected,
+                     rules: Rules, top: int = 12) -> dict:
+    """What the legibility filter did, overall and by culture."""
+    n = len(records)
+    failed = {
+        "shape": sum(not rules.shape_ok(a) for a in aspects),
+        "oneColor": sum(s[0] > rules.max_dominant for s in stats),
+        "fewColors": sum(s[1] < rules.min_colors for s in stats),
+        "lowContrast": sum(s[2] < rules.min_contrast for s in stats),
+    }
+    culture = [clean(r.get("culture")) or "Unknown" for r in records]
+    pool_c = Counter(culture)
+    legible_c = Counter(c for c, ok in zip(culture, passes) if ok)
+    kept_c = Counter(culture[i] for i in selected)
+    names = [c for c, _ in pool_c.most_common(top)]
+    rows = [{"culture": c, "pool": pool_c[c], "legible": legible_c[c], "kept": kept_c[c]} for c in names]
+    rest = [c for c in pool_c if c not in names]
+    if rest:
+        rows.append({
+            "culture": "Other",
+            "pool": sum(pool_c[c] for c in rest),
+            "legible": sum(legible_c[c] for c in rest),
+            "kept": sum(kept_c[c] for c in rest),
+        })
+    return {
+        "rules": {"maxDominant": rules.max_dominant, "minColors": rules.min_colors,
+                  "minContrast": rules.min_contrast, "maxAspect": rules.max_aspect},
+        "pool": n,
+        "legible": int(sum(passes)),
+        "kept": len(selected),
+        "failed": failed,
+        "cultures": rows,
+    }
+
+
 def build(
     records: list[dict],
-    images: list[np.ndarray],
+    images: list[Image.Image],
     sizes: list[int],
     n_colors: int,
     seed: int,
-    base_images: list[Image.Image] | None = None,
+    count: int | None = None,
+    rules: Rules | None = None,
 ) -> dict[int, dict]:
-    """Palette + grids for each size. `images` are the largest-size grids
-    (used to fit the palette); `base_images` are the source images used to
-    make the other sizes."""
+    """Selects legible paintings, fits the palette and makes grids for each
+    size. `records` and `images` are parallel lists, in API order."""
+    rules = rules or Rules()
+    count = count or len(records)
     largest = max(sizes)
-    pixels = np.concatenate([g.reshape(-1, 3) for g in images])
-    lab = srgb_to_lab(pixels)
-    log(f"Fitting a {n_colors}-color palette to {len(lab):,} pixels (k-means in Lab)...")
-    centroids, labels, _ = kmeans(lab, n_colors, seed=seed)
+    aspects = [im.width / im.height for im in images]
+    lab_grids = [srgb_to_lab(downsample(im, largest)).reshape(-1, 3) for im in images]
 
-    # Order palette by how much of the collection each color covers.
-    counts = np.bincount(labels, minlength=n_colors)
-    order = np.argsort(-counts, kind="stable")
-    centroids = centroids[order]
-    share = counts[order] / counts.sum()
+    log(f"Choosing up to {count} legible paintings and a {n_colors}-color palette (k-means in Lab)...")
+    selected, centroids, share, stats, passes = select_works(
+        lab_grids, aspects, count, n_colors, seed, rules)
+    report = selection_report(records, aspects, stats, passes, selected, rules)
     hexes = [to_hex(c) for c in lab_to_srgb(centroids)]
 
     outputs = {}
     for size in sizes:
-        grids = (
-            images
-            if size == largest
-            else [downsample(im, size) for im in (base_images or [])]
-        )
         works = []
-        for record, grid in zip(records, grids):
-            idx = nearest(srgb_to_lab(grid), centroids)
+        for i in selected:
+            lab = lab_grids[i] if size == largest else srgb_to_lab(downsample(images[i], size)).reshape(-1, 3)
+            record = records[i]
             works.append(
                 {
                     "id": record["id"],
@@ -490,18 +604,20 @@ def build(
                     "artist": artist_of(record),
                     "culture": clean(record.get("culture")),
                     "dated": clean(record.get("dated")),
-                    "grid": [int(i) for i in idx],
+                    "aspect": round(aspects[i], 3),
+                    "grid": [int(v) for v in nearest(lab, centroids)],
                 }
             )
         outputs[size] = {
-            "version": 1,
+            "version": 2,
             "size": size,
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "source": "Harvard Art Museums API (classification=Paintings, hasimage=1)",
             "seed": seed,
             "palette": hexes,
             "paletteLab": [[round(float(v), 3) for v in c] for c in centroids],
-            "paletteShare": [round(float(s), 5) for s in share],
+            "paletteShare": [round(float(v), 5) for v in share],
+            "selection": report,
             "works": works,
         }
     return outputs
@@ -515,13 +631,23 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--size", type=int, nargs="+", default=[16], choices=[4, 8, 16, 32],
                    help="grid size(s); 16 -> grids.json, others -> grids-N.json (default: 16)")
-    p.add_argument("--count", type=int, default=1000, help="number of paintings (default: 1000)")
+    p.add_argument("--count", type=int, default=1000, help="number of paintings to keep (default: 1000)")
+    p.add_argument("--pool", type=int, default=0,
+                   help="how many paintings to consider before filtering (default: 0 = all)")
+    p.add_argument("--max-dominant", type=float, default=Rules.max_dominant,
+                   help="max share of cells one color may cover (default: 0.5)")
+    p.add_argument("--min-colors", type=int, default=Rules.min_colors,
+                   help="min number of palette colors used (default: 5)")
+    p.add_argument("--min-contrast", type=float, default=Rules.min_contrast,
+                   help="min std of lightness L* across cells (default: 10)")
+    p.add_argument("--max-aspect", type=float, default=Rules.max_aspect,
+                   help="max long side / short side (default: 1.5)")
     p.add_argument("--colors", type=int, default=10, help="palette size (default: 10)")
     p.add_argument("--seed", type=int, default=1874, help="seed for the API's random sample and k-means")
     p.add_argument("--image-px", type=int, default=128, help="size of the downloaded images (default: 128)")
     p.add_argument("--workers", type=int, default=16, help="parallel image downloads (default: 16)")
-    p.add_argument("--download-budget", type=float, default=900,
-                   help="stop starting new image downloads after this many seconds (default: 900)")
+    p.add_argument("--download-budget", type=float, default=1800,
+                   help="stop starting new image downloads after this many seconds (default: 1800)")
     p.add_argument("--out-dir", type=Path, default=ROOT / "public")
     p.add_argument("--cache-dir", default=str(ROOT / ".cache" / "images"),
                    help="where downloaded images are kept between runs ('' to disable)")
@@ -537,9 +663,10 @@ def main(argv: list[str] | None = None) -> int:
     if cache_dir:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-    log(f"Fetching up to {args.count} paintings from the Harvard Art Museums API...")
+    rules = Rules(args.max_dominant, args.min_colors, args.min_contrast, args.max_aspect)
+    log(f"Fetching {'up to ' + str(args.pool) if args.pool else 'all'} paintings from the Harvard Art Museums API...")
     try:
-        records = fetch_records(api_key, args.count, args.seed)
+        records = fetch_records(api_key, args.pool or None, args.seed)
     except (RuntimeError, ValueError) as e:
         log(f"Could not fetch records: {redact(e)}")
         return 1
@@ -549,27 +676,40 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"Downloading small images ({args.image_px}px) for {len(records)} records...")
     try:
-        kept = download_images(records, args.count, cache_dir, args.image_px,
+        kept = download_images(records, len(records), cache_dir, args.image_px,
                                args.workers, args.download_budget)
     except RuntimeError as e:
         log(f"Could not download images: {e}")
         return 1
     kept_records = [r for r, _ in kept]
     kept_images = [im for _, im in kept]
-    if len(kept_records) < max(args.colors, min(100, args.count)):
-        log(f"Only {len(kept_records)} images downloaded; too few to build a meaningful palette.")
+    if len(kept_records) < args.colors:
+        log(f"Only {len(kept_records)} images downloaded; too few to build a palette.")
         return 1
 
-    largest = sizes[0]
-    grids = [downsample(im, largest) for im in kept_images]
-    outputs = build(kept_records, grids, sizes, args.colors, args.seed, base_images=kept_images)
+    try:
+        outputs = build(kept_records, kept_images, sizes, args.colors, args.seed, args.count, rules)
+    except ValueError as e:
+        log(f"Could not build the grids: {e}")
+        return 1
+    first = outputs[sizes[0]]
+    n_kept = len(first["works"])
+    if n_kept < min(100, args.count):
+        log(f"Only {n_kept} paintings passed the legibility rules; loosen them (see --help).")
+        return 1
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for size, data in outputs.items():
         path = output_path(args.out_dir, size)
         path.write_text(json.dumps(data, separators=(",", ":"), ensure_ascii=False))
         log(f"Wrote {path} ({len(data['works'])} works, {path.stat().st_size / 1024:.0f} KB)")
-    first = outputs[largest]
+
+    sel = first["selection"]
+    log(f"Selection: {sel['pool']} paintings -> {sel['legible']} legible -> kept {sel['kept']}"
+        + (f" (fewer than the {args.count} asked for)" if n_kept < args.count else ""))
+    log("  failed (a painting can fail several): " + ", ".join(f"{k} {v}" for k, v in sel["failed"].items()))
+    log("  by culture (pool -> legible -> kept): " + "; ".join(
+        f"{r['culture']} {r['pool']}->{r['legible']}->{r['kept']}" for r in sel["cultures"]))
     log("Palette (most common first): " + ", ".join(
         f"{h} {s:.0%}" for h, s in zip(first["palette"], first["paletteShare"])))
     return 0

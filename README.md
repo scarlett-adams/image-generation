@@ -30,6 +30,20 @@ Request a free key at <https://harvardartmuseums.org/collections/api>. The key
 is read from `.env` (gitignored) or the `HARVARD_API_KEY` environment variable
 and is never written to the output.
 
+The pipeline looks at every painting with an image (about 4,700) and keeps the
+first 1,000, in the API's seeded random order, that are still legible as a
+16x16 grid: no palette color covers more than half the grid, at least 5 colors
+are used, there is some light/dark contrast, and the painting is no more than
+3:2 tall or wide. Without this, half the collection (mostly East Asian ink
+paintings on silk) comes out as one flat color, and random noise "matches"
+those blank grids almost every time. What the filter removed, by rule and by
+culture, is saved in `grids.json` under `selection`. See `--help` to change
+the rules.
+
+Harvard's image server refuses downloads from cloud build machines (HTTP 403),
+so run the pipeline on your own computer and commit `public/grids.json` and
+`public/grids-8.json`. The Vercel build uses the committed files.
+
 ## Deploying
 
 On Vercel, set `HARVARD_API_KEY` under **Project Settings → Environment

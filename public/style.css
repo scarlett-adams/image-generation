@@ -213,10 +213,20 @@ select:focus-visible,
     0 10px 24px -12px rgb(0 0 0 / 0.35);
 }
 
-.frame canvas {
-  display: block;
-  width: 100%;
+/* A square box; the grid inside keeps its own proportions (an artwork's
+   grid is shown in the painting's real shape), centered on the mat. */
+.canvas-box {
+  position: relative;
   aspect-ratio: 1;
+}
+
+.frame canvas {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
   image-rendering: pixelated;
   image-rendering: crisp-edges;
   background: var(--wall-deep);

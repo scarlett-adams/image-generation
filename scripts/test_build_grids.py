@@ -68,6 +68,21 @@ class KMeansTests(unittest.TestCase):
         np.testing.assert_array_equal(a, b)
 
 
+def patchwork(colors, w=60, h=60, cols=3):
+    """A grid of colored blocks, cycling through `colors`."""
+    im = Image.new("RGB", (w, h))
+    rows = cols
+    for r in range(rows):
+        for c in range(cols):
+            block = Image.new("RGB", (w // cols + 1, h // rows + 1), colors[(r * cols + c) % len(colors)])
+            im.paste(block, (c * w // cols, r * h // rows))
+    return im
+
+
+NO_FILTER = bg.Rules(max_dominant=1, min_colors=1, min_contrast=0, max_aspect=99)
+BOLD = [(0, 0, 0), (255, 255, 255), (200, 30, 30), (30, 60, 200), (240, 210, 40), (40, 150, 60)]
+
+
 class BuildTests(unittest.TestCase):
     def make(self):
         colors = [(120, 80, 40), (230, 220, 200), (20, 30, 60), (180, 40, 30)]
@@ -81,10 +96,10 @@ class BuildTests(unittest.TestCase):
 
     def test_build_shapes_and_palette(self):
         records, images = self.make()
-        grids16 = [bg.downsample(im, 16) for im in images]
-        out = bg.build(records, grids16, [16, 8], n_colors=4, seed=0, base_images=images)
+        out = bg.build(records, images, [16, 8], n_colors=4, seed=0, rules=NO_FILTER)
         for size in (16, 8):
             data = out[size]
+            self.assertEqual(len(data["works"]), 6)
             self.assertEqual(len(data["palette"]), 4)
             self.assertEqual(len(data["paletteLab"]), 4)
             self.assertAlmostEqual(sum(data["paletteShare"]), 1, places=3)
@@ -94,8 +109,8 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(len(work["grid"]), size * size)
                 self.assertTrue(all(0 <= i < 4 for i in work["grid"]))
         w = out[16]["works"][0]
-        self.assertEqual((w["title"], w["artist"], w["culture"], w["dated"]),
-                         ("Work 0", "A. Painter", "Dutch", "1650"))
+        self.assertEqual((w["title"], w["artist"], w["culture"], w["dated"], w["aspect"]),
+                         ("Work 0", "A. Painter", "Dutch", "1650", round(40 / 30, 3)))
         # A solid image maps to a single palette color.
         self.assertEqual(len(set(out[16]["works"][0]["grid"])), 1)
         # A split image keeps its left/right halves.
@@ -104,6 +119,45 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(len(set(g[:, 8:].ravel())), 1)
         self.assertNotEqual(g[0, 0], g[0, 15])
         json.dumps(out)  # serializable
+
+    def test_legibility_filter(self):
+        greys = [(120, 120, 120), (126, 118, 114), (116, 122, 128)]
+        images = [
+            patchwork(BOLD),                      # 0 legible
+            solid((140, 110, 70)),                # 1 one flat color
+            patchwork(BOLD, w=40, h=120),         # 2 tall scroll shape (1:3)
+            patchwork(greys),                     # 3 low contrast
+            split((0, 0, 0), (255, 255, 255)),    # 4 only two colors
+            patchwork(BOLD[::-1]),                # 5 legible
+            patchwork(BOLD[1:] + BOLD[:1]),       # 6 legible
+            patchwork(BOLD, w=70, h=60),          # 7 legible, mildly wide
+        ]
+        records = [{"id": i, "title": f"W{i}", "culture": ["Dutch", "Chinese"][i % 2]} for i in range(len(images))]
+        rules = bg.Rules(max_dominant=0.5, min_colors=4, min_contrast=10, max_aspect=1.5)
+        with mock.patch.object(bg, "log"):
+            out = bg.build(records, images, [16], n_colors=6, seed=0, count=3, rules=rules)[16]
+        self.assertEqual([w["id"] for w in out["works"]], [0, 5, 6])  # first 3 legible, API order
+        sel = out["selection"]
+        self.assertEqual((sel["pool"], sel["legible"], sel["kept"]), (8, 4, 3))
+        self.assertEqual(sel["failed"]["shape"], 1)
+        self.assertGreaterEqual(sel["failed"]["oneColor"], 1)
+        self.assertGreaterEqual(sel["failed"]["fewColors"], 2)
+        self.assertGreaterEqual(sel["failed"]["lowContrast"], 2)
+        self.assertEqual(sel["rules"], {"maxDominant": 0.5, "minColors": 4, "minContrast": 10, "maxAspect": 1.5})
+        by = {r["culture"]: r for r in sel["cultures"]}
+        self.assertEqual(by["Dutch"], {"culture": "Dutch", "pool": 4, "legible": 2, "kept": 2})
+        self.assertEqual(by["Chinese"], {"culture": "Chinese", "pool": 4, "legible": 2, "kept": 1})
+        for w in out["works"]:
+            counts = np.bincount(w["grid"], minlength=6)
+            self.assertLessEqual(counts.max() / 256, 0.5)
+            self.assertGreaterEqual((counts > 0).sum(), 4)
+
+    def test_too_strict_rules_raise(self):
+        images = [solid((100, 100, 100)), solid((10, 10, 10))]
+        records = [{"id": i} for i in range(2)]
+        with mock.patch.object(bg, "log"), self.assertRaises(ValueError):
+            bg.build(records, images, [16], n_colors=4, seed=0,
+                     rules=bg.Rules(max_dominant=0.5, min_colors=4, min_contrast=10, max_aspect=0.5))
 
     def test_downsample_squeezes_whole_image(self):
         im = split((0, 0, 0), (255, 255, 255), w=200, h=50)
@@ -132,7 +186,7 @@ class ApiTests(unittest.TestCase):
         ]
         get, calls = self.fake_api(pages)
         with mock.patch.object(bg, "http_get", get), mock.patch.object(bg, "log"):
-            records = bg.fetch_records("SECRET", count=10, seed=1)
+            records = bg.fetch_records("SECRET", limit=None, seed=1)
         self.assertEqual([r["id"] for r in records], [1, 2, 5])
         self.assertEqual(len(calls), 2)
         self.assertIn("classification=Paintings", calls[0])
@@ -249,15 +303,16 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(bg.read_api_key(), "abc-123")
 
     def test_end_to_end_with_fake_api(self):
-        colors = [(120, 80, 40), (230, 220, 200), (20, 30, 60), (180, 40, 30), (90, 110, 60)]
         pages = [[{"id": i, "title": f"T{i}", "primaryimageurl": f"https://img/{i}",
-                   "people": [{"role": "Artist", "name": "P"}]} for i in range(12)]]
+                   "people": [{"role": "Artist", "name": "P"}]} for i in range(p * 10, p * 10 + 10)]
+                 for p in range(2)]
         get_api, _ = self.fake_api(pages)
 
         def get(url, **kw):
             if url.startswith("https://img/"):
                 i = int(url.split("/")[3].split("?")[0])
-                im = split(colors[i % 5], colors[(i + 1) % 5]) if i % 2 else solid(colors[i % 5])
+                # every third painting is a flat color the filter should drop
+                im = solid(BOLD[i % 6]) if i % 3 == 0 else patchwork(BOLD[i % 6:] + BOLD[:i % 6])
                 buf = io.BytesIO()
                 im.save(buf, "JPEG")
                 return buf.getvalue()
@@ -269,7 +324,7 @@ class ApiTests(unittest.TestCase):
             old_cwd = os.getcwd()
             os.chdir(cwd)
             try:
-                code = bg.main(["--size", "16", "8", "--count", "10", "--colors", "5",
+                code = bg.main(["--size", "16", "8", "--count", "10", "--colors", "6", "--min-colors", "4",
                                 "--out-dir", d, "--cache-dir", ""])
             finally:
                 os.chdir(old_cwd)
@@ -278,6 +333,10 @@ class ApiTests(unittest.TestCase):
             g16 = json.loads(Path(d, "grids.json").read_text())
             g8 = json.loads(Path(d, "grids-8.json").read_text())
             self.assertEqual(len(g16["works"]), 10)
+            self.assertTrue(all(w["id"] % 3 for w in g16["works"]))  # flat ones dropped
+            self.assertEqual([w["id"] for w in g16["works"]], [w["id"] for w in g8["works"]])
+            self.assertEqual(g16["selection"]["pool"], 20)
+            self.assertEqual(g16["selection"]["kept"], 10)
             self.assertEqual(g16["palette"], g8["palette"])
             self.assertEqual(len(g8["works"][0]["grid"]), 64)
             self.assertNotIn("apikey", json.dumps(g16))

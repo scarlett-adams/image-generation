@@ -60,7 +60,7 @@
 
       <section class="gallery" aria-label="Gallery">
         <figure class="piece">
-          <div class="frame"><canvas id="current" width="16" height="16" aria-label="The monkey's latest grid"></canvas></div>
+          <div class="frame"><div class="canvas-box"><canvas id="current" width="16" height="16" aria-label="The monkey's latest grid"></canvas></div></div>
           <figcaption class="label">
             <p class="label-kicker">Latest attempt</p>
             <p class="label-title" id="current-title">—</p>
@@ -69,7 +69,7 @@
         </figure>
 
         <figure class="piece">
-          <div class="frame"><canvas id="best" width="16" height="16" aria-label="The best grid so far"></canvas></div>
+          <div class="frame"><div class="canvas-box"><canvas id="best" width="16" height="16" aria-label="The best grid so far"></canvas></div></div>
           <figcaption class="label">
             <p class="label-kicker">Best so far</p>
             <p class="label-title" id="best-score">—</p>
@@ -78,7 +78,7 @@
         </figure>
 
         <figure class="piece">
-          <div class="frame"><canvas id="closest" width="16" height="16" aria-label="The closest artwork, as a grid"></canvas></div>
+          <div class="frame"><div class="canvas-box"><canvas id="closest" width="16" height="16" aria-label="The closest artwork, as a grid, in its real proportions"></canvas></div></div>
           <figcaption class="label" id="closest-label">
             <p class="label-kicker">Closest artwork</p>
             <p class="label-artist" id="closest-artist">—</p>
